@@ -1,0 +1,146 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'sakura'
+
+def parse_args(argv)
+  opt = Hash.new
+  parser = OptionParser.new
+
+  opt[:domain] = nil
+  opt[:password] = nil
+
+  if ENV['SAKURA_DOMAIN']
+    opt[:domain] = ENV['SAKURA_DOMAIN']
+  end
+  parser.on('-d', '--domain DOMAIN',
+            'Domain. If SAKURA_DOMAIN env. variable is set, it is used as a default value') do |value|
+    opt[:domain] = value
+  end
+
+  if ENV['SAKURA_PASSWORD']
+    opt[:password] = ENV['SAKURA_PASSWORD']
+  end
+  parser.on('-p', '--password PASSWORD',
+            'Password. If SAKURA_PASSWORD env. variable is set, it is used as a default value') do |value|
+    opt[:password] = value
+  end
+
+  parser.parse!(argv)
+  opt
+end
+
+class Dispatcher
+  attr_reader :prefix
+
+  def initialize(prefix = nil)
+    @prefix = prefix
+    @commands = Hash.new
+    @subdispatchers = Hash.new
+  end
+
+  def register_command(name, help_str, &proc)
+    if name.is_a? String
+      if @commands[name]
+        ArgumentError.new("Command '#{@commands[name].full_name}' is already registered")
+      elsif @subdispatchers[name]
+        ArgumentError.new("'#{@commands[name].full_name}' is not a command")
+      end
+      @commands[name] = Command.new(@prefix, name, help_str, &proc)
+    elsif name.is_a? Array
+      if name.size == 0
+        raise ArgumentError.new
+      elsif name.size == 1
+        self.register_command(name.first, help_str, &proc)
+      else
+        name_list = name
+        name = name_list.shift
+        if @commands[name]
+          ArgumentError.new("'#{@commands[name].full_name}' is registered as a command")
+        elsif @subdispatchers[name]
+          subdispatcher = @subdispatchers[name]
+        else
+          prefix = (@prefix ? @prefix + " " : "") + name
+          subdispatcher = Dispatcher.new(prefix)
+          @subdispatchers[name] = subdispatcher
+        end
+        subdispatcher.register_command(name_list, help_str, &proc)
+      end
+    end
+  end
+
+  def dispatch(*args)
+    if args.size == 0
+      raise ArgumentError.new
+    elsif command = @commands[args.first]
+      args.shift
+      command.dispatch(*args)
+    elsif subdispatcher = @subdispatchers[args.first]
+      args.shift
+      subdispatcher.dispatch(*args)
+    else
+      raise ArgumentError.new("args = #{args.inspect}")
+    end
+  end
+
+  class Command
+    attr_reader :name
+
+    def initialize(prefix, name, help_str = nil, &proc)
+      if proc.nil?
+        raise ArgumentError.new
+      end
+      @prefix = prefix
+      @name = name
+      @proc = proc
+      @help_str = help_str
+    end
+
+    def full_name
+      if prefix
+        @prefix + " " + name
+      else
+        @name
+      end
+    end
+
+    def dispatch(*args)
+      @proc.call(*args)
+    end
+  end
+end
+
+class SakuraManagedServer
+  def initialize(domain, password)
+    @panel = Sakura::ManagedServer::ControlPanel.new(domain, password)
+    $stderr.puts("Success: login with #{domain}")
+    @dispatcher = Dispatcher.new
+
+    @dispatcher.register_command(['user', 'add'], nil){|username, password|
+      if username.nil? || password.nil?
+        raise ArgumentError.new("'user add' requires username and password")
+      end
+      result = @panel.add_user(username, password)
+      if result
+        $stderr.puts("Success: add user '#{username}'")
+      else
+        $stderr.puts("Failure: add user '#{username}'")
+      end
+    }
+  end
+
+  def dispatch(options, argv)
+    @dispatcher.dispatch(*argv)
+  end
+end
+
+def main(argv)
+  opt = parse_args(argv)
+
+  instance = SakuraManagedServer.new(opt[:domain], opt[:password])
+  instance.dispatch(opt, argv)
+end
+
+if __FILE__ == $0
+  main(ARGV.dup)
+end

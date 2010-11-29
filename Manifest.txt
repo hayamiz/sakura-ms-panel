@@ -1,0 +1,8 @@
+.autotest
+History.txt
+Manifest.txt
+README.txt
+Rakefile
+bin/sakura_ms_panel
+lib/sakura_ms_panel.rb
+test/test_sakura_ms_panel.rb
